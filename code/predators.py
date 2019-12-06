@@ -274,10 +274,9 @@ class Agent(object):
         ## Store.
         self.info = pd.DataFrame(info, columns=("S","S'","R","T"))
 
-    def solve(self, terminal=(), max_iter=100):
+    def solve(self, terminal=()):
 
         self.update_info(terminal=terminal)
-        self.solver.max_iter = max_iter
         self.solver.fit(self)
         self.solved = True
 
@@ -306,7 +305,14 @@ class Agent(object):
 
         new_idx = np.unravel_index(self.solver.pi[1], self.environment.size)
         self.idx = (new_idx[1], new_idx[0])
+        self.environment.feature_arrays[self.name] *= 0
+        self.environment.feature_arrays[self.name][new_idx] = 1
         self.solved = False
+
+        # Remove rewards if eaten
+        if 'eward' in self.function and self.environment.feature_arrays['reward'][self.idx[1], self.idx[0]] == 1:
+            print("REWARDED")
+            self.environment.feature_arrays['reward'][self.idx[1], self.idx[0]] = 0
 
     def plot_distances(self, filename='distances.svg'):
 
@@ -337,7 +343,7 @@ class Agent(object):
 
         plt.show()
 
-    def plot_state_rewards(self, filename=None):
+    def plot_state_rewards(self, filename=None, cbar=True):
 
         self.get_state_rewards()
 
@@ -355,7 +361,9 @@ class Agent(object):
         ax.set_ylim(-0.5, self.environment.size[0] - 0.5)
 
         im = ax.imshow(self.state_rewards, origin='lower',)
-        cbar = plt.colorbar(im, fraction=0.03, pad=0.04, label='Reward')
+
+        if cbar:
+            cbar = plt.colorbar(im, fraction=0.03, pad=0.04, label='Reward')
 
         # function_string = ' + '.join([r'{0} \cdot X_{1}'.format(self.predator.function[i], i + 1) for i in range(len(self.predator.function))])
 
@@ -364,12 +372,13 @@ class Agent(object):
         if filename is not None:
             plt.savefig(filename)
 
-    def plot_state_values(self, filename=None):
+    def plot_state_values(self, filename=None, ax=None, cbar=True, **kwargs):
 
         if not self.solved:
             self.solve()
 
-        _, ax = plt.subplots(dpi=100)
+        if ax is None:
+            _, ax = plt.subplots(dpi=100)
 
         # Gridlines
         ax.set_xticks(np.arange(self.environment.size[1]) - 0.5)
@@ -382,12 +391,14 @@ class Agent(object):
         ax.set_xlim(-0.5, self.environment.size[1] - 0.5) 
         ax.set_ylim(-0.5, self.environment.size[0] - 0.5)
 
-        im = ax.imshow(self.solver.V.reshape(self.environment.size), origin='lower',)
-        cbar = plt.colorbar(im, fraction=0.03, pad=0.04, label='Value')
+        im = ax.imshow(self.solver.V.reshape(self.environment.size), origin='lower', **kwargs)
+
+        if cbar:
+            cbar = plt.colorbar(im, fraction=0.03, pad=0.04, label='Value')
 
         # function_string = ' + '.join([r'{0} \cdot X_{1}'.format(self.predator.function[i], i + 1) for i in range(len(self.predator.function))])
 
-        ax.set_title(r'$y = {0}$'.format(self.function))
+        # ax.set_title(r'$y = {0}$'.format(self.function))
 
         if filename is not None:
             plt.savefig(filename)
@@ -398,10 +409,12 @@ class Agent(object):
 
         self.move_history.append(self.idx)
         self.idx = (x, y)
+        self.environment.feature_arrays[self.name] *= 0
+        self.environment.feature_arrays[self.name][y, x] = 1
         self.solved = False
 
 
-    def plot_policy(self, color='w', head_width=0.25, head_length=0.25):
+    def plot_policy(self, color='w', head_width=0.25, head_length=0.25, ax=None, cbar=True, **kwargs):
         """Plot agent policy on grid world.
         Parameters
         ----------
@@ -423,7 +436,7 @@ class Agent(object):
 
         if not self.solved:
             self.solve()
-        ax = self.plot_state_values()
+        ax = self.plot_state_values(ax=ax, cbar=cbar, **kwargs)
         pi = self.solver.pi
 
         ## Error-catching.
