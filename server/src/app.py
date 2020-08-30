@@ -5,6 +5,7 @@ import sys
 from mdp import HexGridMDP, ValueIteration, HexEnvironment, Agent
 from solvers import MaxCausalEntIRL, SimpleIRL
 import numpy as np
+from numpy.random import RandomState
 from flask_restful import reqparse
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -23,7 +24,7 @@ firebase_admin.initialize_app()
 
 db = firestore.client()
 
-firebase_ref = db.collection(u'avoidanceIRL').document(u'pilot1').collection('subjects')
+firebase_ref = db.collection(u'avoidanceIRL').document(u'pilot2').collection('subjects')
 
 app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}})
@@ -47,31 +48,33 @@ env_parser.add_argument('env')
 environments = dict()
 
 # ENVIRONMENT 1
+rng = RandomState(123)
 features = np.zeros((3, 21 * 10))
-features[1, np.random.randint(0, 21 * 10, 100)] = 1
-features[0, 135:139] = 1
-features[0, 145:139] = 1
-features[0, 155:159] = 1
+features[1, rng.randint(0, 21 * 10, 100)] = 1
+features[0, 35:39] = 1
+features[0, 45:49] = 1
+features[0, 55:59] = 1
 
 # Reward
-features[2, np.random.random_integers(0, 209, 15)] = 1
+features[2, rng.random_integers(0, 209, 15)] = 1
 
 testMDP1 = HexGridMDP(features, (21, 10))
 testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=200, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
-testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=108, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
+testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=198, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 
 testEnvironment1 = HexEnvironment(testMDP1, [testAgent1, testAgent2])
 environments['env_0'] = testEnvironment1
 
 # ENVIRONMENT 2
+rng = RandomState(123)
 features = np.zeros((3, 21 * 10))
-features[1, np.random.randint(0, 21 * 10, 100)] = 1
-features[0, 35:40] = 1
-features[0, 45:50] = 1
-features[0, 55:60] = 1
+features[1, rng.randint(0, 21 * 10, 100)] = 1
+features[0, 10:20] = 1
+features[0, 20:30] = 1
+features[0, 30:40] = 1
 
 # Reward
-features[2, np.random.random_integers(0, 209, 15)] = 1
+features[2, rng.random_integers(0, 209, 15)] = 1
 testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=180, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=108, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 
@@ -79,36 +82,33 @@ testMDP2 = HexGridMDP(features, (21, 10))
 testEnvironment2 = HexEnvironment(testMDP2, [testAgent1, testAgent2])
 environments['env_1'] = testEnvironment2
 
-# ENVIRONMENT 3
+# ENV 3 good
+rng = RandomState(123)
 features = np.zeros((3, 21 * 10))
-features[1, np.random.randint(0, 21 * 10, 100)] = 1
-for i in range(7):
+features[1, rng.randint(0, 21 * 10, 100)] = 1
+for i in range(3):
     features[0, i*10:i*10+4] = 1
 
 # Reward
-features[2, np.random.random_integers(0, 209, 15)] = 1
+features[2, rng.random_integers(0, 209, 15)] = 1
 testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=209, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
-testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=36, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
+testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=2, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 
 testMDP3 = HexGridMDP(features, (21, 10))
 testEnvironment3 = HexEnvironment(testMDP3, [testAgent1, testAgent2])
 environments['env_2'] = testEnvironment3
 
 # ENVIRONMENT 4
+rng = RandomState(123)
 features = np.zeros((3, 21 * 10))
-features[1, np.random.randint(0, 21 * 10, 100)] = 1
-for i in range(8, 14):
-    features[0, i*10+4:i*10+8] = 1
-for i in range(5):
-    features[0, i*10:i*10+3] = 1
-for i in range(15, 20):
-    features[0, i*10:i*10+3] = 1
+features[1, rng.randint(0, 21 * 10, 100)] = 1
+
 for i in range(19, 21):
     features[0, i*10+5:i*10+10] = 1
 
 # Reward
-features[2, np.random.random_integers(0, 209, 15)] = 1
-testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=125, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
+features[2, rng.random_integers(0, 209, 15)] = 1
+testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=3, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=36, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 
 testMDP4 = HexGridMDP(features, (21, 10))
@@ -116,18 +116,19 @@ testEnvironment4 = HexEnvironment(testMDP4, [testAgent1, testAgent2])
 environments['env_3'] = testEnvironment4
 
 # ENVIRONMENT 5
+rng = RandomState(123)
 features = np.zeros((3, 21 * 10))
-features[1, np.random.randint(0, 21 * 10, 100)] = 1
+features[1, rng.randint(0, 21 * 10, 100)] = 1
 
 for i in range(6):
-    features[0, i*10:i*10+3] = 1
+    features[0, i*10+8:i*10+10] = 1
 
 for i in range(8):
-    features[2, i*10 + np.random.random_integers(3, 7, 3)] = 1
+    features[2, i*10 + rng.random_integers(3, 7, 3)] = 1
 
 # Reward
 # features[2, np.random.random_integers(0, 209, 15)] = 1
-testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=30, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
+testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=180, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=36, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 
 testMDP5 = HexGridMDP(features, (21, 10))
@@ -135,22 +136,29 @@ testEnvironment5 = HexEnvironment(testMDP5, [testAgent1, testAgent2])
 environments['env_4'] = testEnvironment5
 
 # ENVIRONMENT 6
+rng = RandomState(123)
 features = np.zeros((3, 21 * 10))
-features[1, np.random.randint(0, 21 * 10, 100)] = 1
+features[1, rng.randint(0, 21 * 10, 100)] = 1
 features[1, 100:110] = 1
+
+for i in range(7, 14):
+    features[1, i*10+3:i*10+8] = 1
+
+for i in range(3, 14):
+    features[1, i*10:i*10+2] = 1
+
 
 for i in range(7, 14):
     features[0, i*10+4:i*10+7] = 1
 
 # Reward
-features[2, np.random.random_integers(0, 209, 15)] = 1
+features[2, rng.random_integers(0, 209, 15)] = 1
 testAgent1 = Agent('Predator_1', [1, 0, 0, 0, 0], position=100, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 testAgent2 = Agent('Prey_1', [0, 0, 1, 0, 0], position=115, solver_kwargs={'discount': 0.9, 'tol': 1e-4})
 
 testMDP6 = HexGridMDP(features, (21, 10))
 testEnvironment6 = HexEnvironment(testMDP6, [testAgent1, testAgent2])
 environments['env_5'] = testEnvironment6
-
 
 
 
