@@ -144,19 +144,19 @@ def grid_coords(state_grid):
 
 class MDP():
 
-    def __init__(self, adjacency, features, sas, feature_names=None):
+    def __init__(self, features, sas, adjacency=None, feature_names=None):
         """
         Represents a MDP
 
         Args:
             adjacency (numpy.ndarray): State adjacency matrix (i.e. one-step transitions), shape (n_states, n_states)
             features (numpy.ndarray): Array of features in each state, shape (n_features, n_states)
-            sas (numpy.ndarray): Array representing the probability of transitioning from state S to state S' given action A
+            sas (numpy.ndarray): Array representing the probability of transitioning from state S to state S' given action A, of shape (states, actions, states)
 
         """
        
         # Get SAS
-        if not isinstance(sas, np.ndarray) or not sas.ndim == 3 or not sas.shape[0] == sas.shape[2]:
+        if  not sas.ndim == 3 or not sas.shape[0] == sas.shape[2]:
             raise TypeError('SAS should be a numpy array of shape (states, actions, states)')
 
         self.sas = sas
@@ -164,13 +164,17 @@ class MDP():
         self.n_actions = sas.shape[1]
 
         # Get adjacency
-        if not isinstance(adjacency, np.ndarray):
-            raise TypeError('Adjacency matrix should be a numpy array')
-        if not adjacency.ndim == 2:
-            raise AttributeError('Adjacency matrix should have two dimensions')
-        if not adjacency.shape[0] == adjacency.shape[1]:
-            raise AttributeError('Adjacency matrix should be square, found shape {0}'.format(adjacency.shape))
-        self.adjacency = adjacency
+        if adjacency is not None:
+            if not isinstance(adjacency, np.ndarray):
+                raise TypeError('Adjacency matrix should be a numpy array')
+            if not adjacency.ndim == 2:
+                raise AttributeError('Adjacency matrix should have two dimensions')
+            if not adjacency.shape[0] == adjacency.shape[1]:
+                raise AttributeError('Adjacency matrix should be square, found shape {0}'.format(adjacency.shape))
+            self.adjacency = adjacency
+        else:
+            warnings.warn('No adjacency matrix provided, some functions may not work')
+            self.adjacency = adjacency
 
         # Get features
         if not isinstance(features, np.ndarray):
@@ -239,7 +243,7 @@ class HexGridMDP(MDP):
             if self_transitions:
                 self.sas[i, -1, i] = 1
 
-        super().__init__(self.adjacency, features, self.sas, feature_names=feature_names)
+        super().__init__(features, self.sas, self.adjacency, feature_names=feature_names)
 
     def get_state_coords(self, state):
 
@@ -349,7 +353,6 @@ class Agent():
     def generate_trajectory(self, n_steps=5, start_state=None):
 
         # Assumes deterministic mdp
-
         if not self.solver.fit_complete:
             raise AttributeError('Solver has not been fit yet')
 

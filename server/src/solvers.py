@@ -39,34 +39,32 @@ def state_value_iterator(n_states, values, delta, q_values, reward, discount, sa
     return values, delta, q_values
 
 @jit(nopython=True)
-def state_visitation_iterator(n_states, n_actions, sas, tol, pi_sa_):
-
+def state_visitation_iterator(n_states, n_actions, sas, n_iter, pi_sa_, p_zero):
+    # Algorithm 9.3 in Ziebart's thesis
     D_ = np.zeros(n_states)
     delta_arr = np.zeros(2)
 
     # Checking for convergence
     delta = np.inf
-    converged = False
-
-    # Probability of starting in a given state
-    p_zero = np.ones(n_states) / n_states
-
+    count = 0
     # Run state visitation algorithm
-    while not converged:
+    while count < n_iter:
+        # print(count)
         Dprime = p_zero.copy()
         for s in range(n_states):
             for a in range(n_actions):
                 for s_prime in range(n_states):
                     Dprime[s_prime] = Dprime[s_prime] + D_[s] * pi_sa_[s, a] * sas[s, a, s_prime]
-
-        delta_arr[0] = delta
-        delta_arr[1] = np.median(np.abs(D_ - Dprime))
+        # print(np.sum(Dprime))
+        # delta_arr[0] = delta
+        # delta_arr[1] = np.max(np.abs(D_ - Dprime))
         # delta = np.min([delta, ])
-        delta = np.min(delta_arr)
-
+        # delta = np.min(delta_arr)
+        # print(delta)
+        count += 1
         D_ = Dprime.copy()
-        if delta < tol:
-            converged = True
+        # if delta < tol:
+        #     converged = True
     
     return D_
 
@@ -95,9 +93,12 @@ class ValueIteration():
             # Loop over actions for this state
             for a in range(mdp.n_actions):
                 # Probability of transitions given action - allows non-deterministic MDPs
-                p_sprime = mdp.sas[s, a, :]  
+                # p_sprime = mdp.sas[s, a, :]  
                 # Value of each state given actions
-                action_values[a] = np.sum(np.dot(p_sprime, self.reward_ + self.discount*self.values_))
+                # action_values[a] = np.sum(np.dot(p_sprime, self.reward_ + self.discount*self.values_))
+
+                for s2 in range(mdp.n_states):
+                    action_values[a] += mdp.sas[s, a, s2] * (self.reward_[s2] + self.discount * self.values_[s2])
 
             self.q_values_[s, :] = action_values
 
@@ -194,9 +195,19 @@ class MaxCausalEntIRL(ValueIteration):
 
         super().__init__(**kwargs)
 
-    def _get_state_visitation_frequencies(self, mdp):
+    def _get_state_visitation_frequencies(self, mdp, trajectories):
 
-        self.D_ = state_visitation_iterator(mdp.n_states, mdp.n_actions, mdp.sas, self.tol, self.pi_sa_)
+        # Probability of starting in a given state
+        p_zero = np.zeros(mdp.n_states)
+        for t in trajectories:
+            p_zero[t[0]] += 1
+        p_zero /= np.sum(p_zero)
+
+        # p_zero = np.ones(mdp.n_states) / mdp.n_states
+
+        self.D_ = state_visitation_iterator(mdp.n_states, mdp.n_actions, mdp.sas, len(trajectories[0]), self.pi_sa_, p_zero)
+        # print('D_', self.D_.sum())
+        # TODO use algorithm 10.1 to get feature expectations
 
         # self.D_ = np.zeros(mdp.n_states)
 
@@ -221,15 +232,15 @@ class MaxCausalEntIRL(ValueIteration):
         #     if delta < self.tol:
         #         converged = True
     
-    def _maxcausalent_innerloop(self, mdp, theta):
+    def _maxcausalent_innerloop(self, mdp, theta, trajectories):
 
         # Solve MDP using value iteration
         self._solve_value_iteration(mdp, theta, method=self.method)
         # Get state visitation frequencies
-        self._get_state_visitation_frequencies(mdp)
+        self._get_state_visitation_frequencies(mdp, trajectories)
         # Get feature counts
         deltaF = (mdp.features * self.D_).sum(axis=1).astype(float)
-        deltaF /= deltaF.sum()
+        # deltaF /= deltaF.sum()
 
         return deltaF
             
@@ -243,7 +254,8 @@ class MaxCausalEntIRL(ValueIteration):
 
         true_F = (mdp.features * visited_states).sum(axis=1).astype(float)
         # print(true_F)
-        true_F /= np.sum(true_F)
+        # true_F /= np.sum(true_F)
+        true_F[ignore_features] = 0
 
         # Initial guess at reward function
         if reset or self.theta is None:
@@ -257,12 +269,13 @@ class MaxCausalEntIRL(ValueIteration):
 
         for i in pb:
             
-
-            deltaF = self._maxcausalent_innerloop(mdp, self.theta)
+            
+            deltaF = self._maxcausalent_innerloop(mdp, self.theta, trajectories)
+            deltaF[ignore_features] = 0
+            # print(visited_states, self.D_)
+            # print(true_F, deltaF)
 
             error = true_F - deltaF
-
-            error[ignore_features] = 0
 
             # Increment reward function
             self.theta += self.learning_rate * error
@@ -283,6 +296,63 @@ class MaxCausalEntIRL(ValueIteration):
 
         self._solve_maxcausalent(mdp, trajectories, reset=reset, ignore_features=ignore_features)
 
+def softmax(v):
+
+    prob = v.exp() / (v.exp() + (1 - v).exp())
+
+    prob
+
+
+class ActionIRL(ValueIteration):
+
+    # 1. Get value function
+    # 2. Calculate likelihood of chosen action(s) based on value function (as suggested by Peter)
+    # 3. Maximise this
+
+
+    def __init__(self, max_iter_irl=20, method='numba', **kwargs):
+
+        self.max_iter_irl = max_iter_irl
+        self.method = method
+
+        self.theta = None
+
+        super().__init__(**kwargs)
+
+        
+    def get_state_action_error(self, state):
+        """Gives the signed TD error associated with taking action A in state X
+        Equal to the reward obtained through taking action X in state X (=reward received in state X') 
+        plus the value of state X'
+
+        Args:
+            state (int): The state moved into (X')
+        """
+
+        return softmax(self.reward_[state] + self.values_[state])
+
+    # def action_likelihood(self, mdp, theta, )
+
+    def _solve_actionIRL(self, theta, mdp, trajectories):
+
+        # Solve MDP using value iteration
+        self._solve_value_iteration(mdp, theta, method=self.method)
+
+        ll = 0
+
+        for t in trajectories:
+            for state in t[1:]:
+                ll += self.get_state_action_error(state)
+
+        return -ll
+
+    
+    def fit(self, mdp, trajectories, reset=True, ignore_features=()):
+
+        res = minimize(self._solve_actionIRL, np.ones(mdp.n_features), args=(mdp, trajectories))
+
+        self.theta = res.x
+
 
 class SimpleIRL():
 
@@ -302,8 +372,268 @@ class SimpleIRL():
 
         self.theta = res.x
 
+def state_pair_to_action(mdp, s1, s2):
+
+    if np.max(mdp.sas[s1, :, s2]) > 0:
+        return np.argmax(mdp.sas[s1, :, s2])
+    else:
+        raise AttributeError("States are not adjacent")
+    
+
+def get_eyeline_features(mdp, current_state, action):
+
+    complete = False
+    states = []
+
+    while not complete:
+        states.append(current_state)
+        sa_next_states = mdp.sas[current_state, action, :]
+        if np.max(sa_next_states) > 0:
+            current_state = np.argmax(sa_next_states)
+        else:
+            complete = True
+    observed_features = mdp.features[:, states].sum(axis=1)
+    return observed_features
+
+def get_trajectory_eyeline_features(mdp, trajectories, normalise=True):
+
+    feature_counts = np.zeros(mdp.n_features)
+
+    for trajectory in trajectories:
+
+        for n, state in enumerate(trajectory[:-1]):
+            action = state_pair_to_action(mdp, state, trajectory[n+1])
+            print(get_eyeline_features(mdp, state, action))
+            feature_counts += get_eyeline_features(mdp, state, action)
+
+    if normalise:
+        feature_counts /= feature_counts.sum()
+
+    return feature_counts
 
 
+class SimpleActionIRL():
+
+    def fit(self, mdp, trajectories):
+
+        observed_feature_counts = get_trajectory_eyeline_features(mdp, trajectories)
+
+        self.theta = observed_feature_counts
+
+def get_actions_states(sas, current_node):
+
+    # Get available actions from this state and the resulting next states
+    actions_states = np.argwhere(sas[current_node, :, :])
+    # Get actions
+    actions = actions_states[:, 0] 
+    # Get resulting states
+    states = actions_states[:, 1]
+
+    return actions_states, actions, states
 
 
+def mcts_iteration(V, N, rewards, sas, agent_start_node, opponent_start_node, n_steps, C, agent_moves=1, opponent_moves=2):
+
+    current_node = {'agent': agent_start_node, 'opponent': opponent_start_node}
+    expand = True  # This determines whether we expand or simulate
+    accumulated_reward = 0  # Total reward accumulated across all states
+    visited_states = []
+
+    player = 'agent'
+    current_moves = {'agent': 0, 'opponent': 0}
+
+    for step in range(n_steps):
+
+        # Get reward available in current state if it's the agent's turn - TODO check this is correct
+        if player == 'agent':
+            accumulated_reward += rewards[current_node['agent'], 0]
+
+            # If the agent and opponent are in the same state, the agent has been caught and loses
+            if current_node['agent'] == current_node['opponent']:
+                accumulated_reward = 0
+                break
+
+            # Append to list of visited states 
+            visited_states.append(current_node['agent'])
+
+        # Get actions and resulting states from current node
+        actions_states, actions, states = get_actions_states(sas, current_node[player])
+
+        # Check whether we need to expand - if we haven't already expanded all possible next nodes
+        if expand and np.any(N[states] == 0):
+
+            # Identify states taht haven't been explored yet
+            unexplored = states[N[states] == 0]
+            # Select one of these at random
+            current_node[player] = np.random.choice(unexplored)
         
+            # Each step from now on will be a simulation rather than expansion
+            expand = False
+
+        # If we've not yet reached a point where we need to expand, pick next state using UCT
+        elif expand:
+            
+            # If it's the agent's turn, use UCB
+            if player == 'agent':
+                # Calculate UCB (or UCT)
+                ucb = (V[states] / (1 + N[states])) + C * np.sqrt((2 * np.log(N[current_node['agent']])) / (1 + N[states]))
+
+                # Pick the node with the highest value
+                current_node['agent'] = states[np.argmax(ucb)]
+
+            # Otherwise pick at random - TODO opponent policy
+            else:
+                current_node['opponent'] = np.random.choice(states)
+
+
+        elif not step == n_steps - 1: # Randomly select follow-up nodes
+            
+            # Select random node
+            current_node[player] = np.random.choice(states)
+
+        # Next step should be the other player
+        if player == 'agent':
+            current_moves['agent'] += 1
+            if current_moves['agent'] == agent_moves:
+                current_moves['agent'] = 0
+                player = 'opponent'
+        else:
+            current_moves['opponent'] += 1
+            if current_moves['opponent'] == opponent_moves:
+                current_moves['opponent'] = 0
+                player = 'agent'
+
+    return accumulated_reward, visited_states
+
+
+class MCTS():
+
+    # https://gist.github.com/qpwo/c538c6f73727e254fdc7fab81024f6e1
+    # https://github.com/jbradberry/mcts/blob/master/mcts/uct.py 
+
+    def __init__(self, mdp, agents):
+
+        self.mdp = mdp
+        self.reset()
+        
+        if len(agents) != 2:
+            raise NotImplementedError("This only works for 2 agents (prey and predator")
+
+        self.agents = agents
+
+    def reset(self):
+
+        self.V = np.zeros((self.mdp.n_states))  # Value of each node
+        self.N = np.zeros((self.mdp.n_states)) # Times each node visited
+
+    def calculate_rewards(self):
+        # TODO probably only need this for one agent (prey)
+        self.rewards = np.zeros((self.mdp.n_states, 2))
+
+        for n, agent in enumerate(self.agents):
+            self.rewards[:, n] = (self.mdp.features * np.array(agent.reward_function)[:, None]).sum(axis=0)
+    
+    def run_mcts(self, agent_start_node, opponent_start_node, n_steps, C, agent_moves=1, opponent_moves=2):
+
+        # Get rewards for each state based on agents' reward functions
+        self.calculate_rewards()  
+
+        accumulated_reward, visited_states = mcts_iteration(self.V, self.N, self.rewards, self.mdp.sas, agent_start_node, 
+                                                            opponent_start_node, n_steps, 
+                                                            C, agent_moves, opponent_moves)
+
+        # V, N = self.V, self.N  # Makes things marginally quicker
+
+        # current_node = {'agent': agent_start_node, 'opponent': opponent_start_node}
+        # expand = True  # This determines whether we expand or simulate
+        # accumulated_reward = 0  # Total reward accumulated across all states
+        # visited_states = []
+
+        # player = 'agent'
+        # current_moves = {'agent': 0, 'opponent': 0}
+
+        # for step in range(n_steps):
+
+        #     # Get reward available in current state if it's the agent's turn - TODO check this is correct
+        #     if player == 'agent':
+        #         accumulated_reward += self.rewards[current_node['agent'], 0]
+
+        #         # If the agent and opponent are in the same state, the agent has been caught and loses
+        #         if current_node['agent'] == current_node['opponent']:
+        #             accumulated_reward = 0
+        #             break
+
+        #         # Append to list of visited states 
+        #         visited_states.append(current_node['agent'])
+
+        #     # Get actions and resulting states from current node
+        #     actions_states, actions, states = get_actions_states(self.mdp, current_node[player])
+
+        #     # Check whether we need to expand - if we haven't already expanded all possible next nodes
+        #     if expand and np.any(N[states] == 0):
+
+        #         # Identify states taht haven't been explored yet
+        #         unexplored = states[N[states] == 0]
+        #         # Select one of these at random
+        #         current_node[player] = np.random.choice(unexplored)
+            
+        #         # Each step from now on will be a simulation rather than expansion
+        #         expand = False
+
+        #     # If we've not yet reached a point where we need to expand, pick next state using UCT
+        #     elif expand:
+                
+        #         # If it's the agent's turn, use UCB
+        #         if player == 'agent':
+        #             # Calculate UCB (or UCT)
+        #             ucb = (V[states] / (1 + N[states])) + C * np.sqrt((2 * np.log(N[current_node['agent']])) / (1 + N[states]))
+
+        #             # Pick the node with the highest value
+        #             current_node['agent'] = states[np.argmax(ucb)]
+
+        #         # Otherwise pick at random - TODO opponent policy
+        #         else:
+        #             current_node['opponent'] = np.random.choice(states)
+
+
+        #     elif not step == n_steps - 1: # Randomly select follow-up nodes
+                
+        #         # Select random node
+        #         current_node[player] = np.random.choice(states)
+
+        #     # Next step should be the other player
+        #     if player == 'agent':
+        #         current_moves['agent'] += 1
+        #         if current_moves['agent'] == agent_moves:
+        #             current_moves['agent'] = 0
+        #             player = 'opponent'
+        #     else:
+        #         current_moves['opponent'] += 1
+        #         if current_moves['opponent'] == opponent_moves:
+        #             current_moves['opponent'] = 0
+        #             player = 'agent'
+        
+        # Backpropogate
+        self.V[visited_states] += accumulated_reward
+        self.N[visited_states] += 1
+
+    def get_action_values(self, start_node):
+
+        actions_states, actions, states = get_actions_states(self.mdp, start_node)
+
+        action_values = self.V[states] / (1 + self.N[states])
+
+        return actions, action_values
+
+
+    def fit(self, agent_start_node, opponent_start_node, n_steps=20, n_iter=100, C=1, agent_moves=1, opponent_moves=2):
+
+        self.reset()  # Clear values
+
+        for i in progress_bar(range(n_iter)):
+            self.run_mcts(agent_start_node, opponent_start_node, n_steps, 
+                          C=C, agent_moves=agent_moves, opponent_moves=opponent_moves)
+
+        actions, action_values = self.get_action_values(agent_start_node)
+
+        return actions, action_values
