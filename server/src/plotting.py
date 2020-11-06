@@ -63,9 +63,9 @@ def draw_hexagons(X, outer_radius=0.1, edgecolor='#787878', cmap='Greys', ax=Non
             coords[0, x, z] = x_coord[-1]
             coords[1, x, z] = y_coord[-1]
 
-    plt.xlim(0 - outer_radius, np.max(x_coord) + outer_radius)
-    plt.ylim(0 - outer_radius, np.max(y_coord) + outer_radius)
-    plt.axis('off')
+    ax.set_xlim(0 - outer_radius, np.max(x_coord) + outer_radius)
+    ax.set_ylim(0 - outer_radius, np.max(y_coord) + outer_radius)
+    ax.axis('off')
     
     if return_coords:
         return coords

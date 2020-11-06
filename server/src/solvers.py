@@ -2,7 +2,7 @@ import numpy as np
 from fastprogress import progress_bar
 import warnings
 from scipy.optimize import minimize
-from numba import jit
+from numba import jit, njit, prange
 
 @jit(nopython=True)
 def state_value_iterator(n_states, values, delta, q_values, reward, discount, sas, n_actions):
@@ -68,6 +68,32 @@ def state_visitation_iterator(n_states, n_actions, sas, n_iter, pi_sa_, p_zero):
     
     return D_
 
+@njit
+def solve_value_iteration(n_states, n_actions, reward_function, features, max_iter, discount, sas, tol):
+
+    # Initialise state values at zero
+    values_ = np.zeros(n_states)
+
+    # Q values
+    q_values_ = np.zeros((n_states, n_actions))
+
+    # Get state rewards based on the supplied reward function
+    reward_ = np.dot(reward_function, features)
+
+    # Until converged   
+    for i in range(max_iter):
+
+        # Delta checks for convergence
+        delta_ = 0
+
+        values_, delta_, q_values = state_value_iterator(n_states, values_, delta_, q_values_, reward_, discount, sas, n_actions)
+
+        if delta_ < tol:
+            break
+    
+    return values_, q_values_
+
+
 class ValueIteration():
 
     def __init__(self, discount=0.9, tol=1e-8, max_iter=500):
@@ -132,50 +158,55 @@ class ValueIteration():
 
         self.pi_ = self.pi_.astype(int)
 
-    def _solve_value_iteration(self, mdp, reward_function, show_progress=False, method='python'):
+    def _solve_value_iteration(self, mdp, reward_function, show_progress=False, method='numba'):
 
-        # Initialise state values at zero
-        self.values_ = np.zeros(mdp.n_states)
+        if method == 'python':
+            # Initialise state values at zero
+            self.values_ = np.zeros(mdp.n_states)
 
-        # Q values
-        self.q_values_ = np.zeros((mdp.n_states, mdp.n_actions))
+            # Q values
+            self.q_values_ = np.zeros((mdp.n_states, mdp.n_actions))
 
-        # Get state rewards based on the supplied reward function
-        self.reward_ = np.dot(reward_function, mdp.features)
+            # Get state rewards based on the supplied reward function
+            self.reward_ = np.dot(reward_function, mdp.features)
 
-        # Until converged
-        if show_progress:
-            pb = progress_bar(range(self.max_iter))
-        else:
-            pb = range(self.max_iter)
-        
-        for i in pb:
-
-            # Delta checks for convergence
-            self.delta_ = 0
-
-            if method == 'python':
-                self._get_state_values(mdp)
-            elif method == 'numba':
-                self._get_state_values_numba(mdp)
-
+            # Until converged
             if show_progress:
-                pb.comment = '| Delta = {0}'.format(self.delta_)
+                pb = progress_bar(range(self.max_iter))
+            else:
+                pb = range(self.max_iter)
+            
+            for i in pb:
 
-            if self.delta_ < self.tol:
+                # Delta checks for convergence
+                self.delta_ = 0
+
+                if method == 'python':
+                    self._get_state_values(mdp)
+                elif method == 'numba':
+                    self._get_state_values_numba(mdp)
+
                 if show_progress:
-                    print("Converged after {0} iterations".format(i))
-                break
+                    pb.comment = '| Delta = {0}'.format(self.delta_)
+
+                if self.delta_ < self.tol:
+                    if show_progress:
+                        print("Converged after {0} iterations".format(i))
+                    break
+            
+            if not self.delta_ < self.tol:
+                warnings.warn('Solver did not converge')
         
-        if not self.delta_ < self.tol:
-            warnings.warn('Solver did not converge')
+        elif method == 'numba':
+
+            self.values_, self.q_values_ = solve_value_iteration(mdp.n_states, mdp.n_actions, np.array(reward_function), mdp.features, self.max_iter, self.discount, mdp.sas, self.tol)
 
         # Get policy from values
         self._get_policy(mdp)      
         
-    def fit(self, mdp, reward_function, method='python'):
+    def fit(self, mdp, reward_function, method='python', show_progress=False):
 
-        self._solve_value_iteration(mdp, reward_function, show_progress=True, method=method)
+        self._solve_value_iteration(mdp, reward_function, show_progress=show_progress, method=method)
         self.fit_complete = True
 
 class MaxCausalEntIRL(ValueIteration):
@@ -420,6 +451,7 @@ class SimpleActionIRL():
 
         self.theta = observed_feature_counts
 
+@njit
 def get_actions_states(sas, current_node):
 
     # Get available actions from this state and the resulting next states
@@ -431,27 +463,51 @@ def get_actions_states(sas, current_node):
 
     return actions_states, actions, states
 
+@njit
+def get_opponent_next_state(opponent_policy_method, opponent_q_values, agent_state, opponent_state, actions, states):
 
-def mcts_iteration(V, N, rewards, sas, agent_start_node, opponent_start_node, n_steps, C, agent_moves=1, opponent_moves=2):
+    if opponent_policy_method is None:
+        next_state = np.random.choice(states)
+
+    elif opponent_policy_method == 'solve':
+        q_values = np.array([opponent_q_values[agent_state, opponent_state, a] for a in actions])
+        next_state = states[np.argmax(q_values)]
+
+    elif opponent_policy_method == 'precalculated':
+        q_values = np.array([opponent_q_values[0, opponent_state, a] for a in actions])
+        next_state = states[np.argmax(q_values)]
+
+    return next_state
+
+@njit
+def mcts_iteration(V, N, rewards, sas, agent_start_node, opponent_start_node, n_steps, C, 
+                   agent_moves=1, min_opponent_moves=2, max_opponent_moves=3, opponent_policy_method=None, 
+                   caught_cost=-50, opponent_q_values=None, end_when_caught=True):
 
     current_node = {'agent': agent_start_node, 'opponent': opponent_start_node}
     expand = True  # This determines whether we expand or simulate
     accumulated_reward = 0  # Total reward accumulated across all states
     visited_states = []
+    rewards = rewards.copy()
 
     player = 'agent'
     current_moves = {'agent': 0, 'opponent': 0}
+    opponent_moves_this_step = 0
 
     for step in range(n_steps):
+
+        # If the agent and opponent are in the same state, the agent has been caught and loses
+        if current_node['agent'] == current_node['opponent']:
+            accumulated_reward += caught_cost
+            if end_when_caught:
+                break
 
         # Get reward available in current state if it's the agent's turn - TODO check this is correct
         if player == 'agent':
             accumulated_reward += rewards[current_node['agent'], 0]
 
-            # If the agent and opponent are in the same state, the agent has been caught and loses
-            if current_node['agent'] == current_node['opponent']:
-                accumulated_reward = 0
-                break
+            # Remove reward from this state for future moves
+            rewards[current_node['agent'], 0] = 0
 
             # Append to list of visited states 
             visited_states.append(current_node['agent'])
@@ -481,29 +537,68 @@ def mcts_iteration(V, N, rewards, sas, agent_start_node, opponent_start_node, n_
                 # Pick the node with the highest value
                 current_node['agent'] = states[np.argmax(ucb)]
 
-            # Otherwise pick at random - TODO opponent policy
+            # Otherwise pick according to predator policy
             else:
-                current_node['opponent'] = np.random.choice(states)
+                current_node[player] = get_opponent_next_state(opponent_policy_method, opponent_q_values, current_node['agent'], current_node['opponent'], actions, states)
 
 
-        elif not step == n_steps - 1: # Randomly select follow-up nodes
+        elif not step == n_steps - 1: # Randomly select follow-up nodes for simulation
             
             # Select random node
-            current_node[player] = np.random.choice(states)
+            if player == 'agent':
+                current_node[player] = np.random.choice(states)
+
+            # Otherwise pick according to predator policy
+            else:
+                current_node[player] = get_opponent_next_state(opponent_policy_method, opponent_q_values, current_node['agent'], current_node['opponent'], actions, states)
 
         # Next step should be the other player
         if player == 'agent':
             current_moves['agent'] += 1
             if current_moves['agent'] == agent_moves:
                 current_moves['agent'] = 0
+                opponent_moves_this_step = np.random.randint(min_opponent_moves, max_opponent_moves)
                 player = 'opponent'
         else:
             current_moves['opponent'] += 1
-            if current_moves['opponent'] == opponent_moves:
+            if current_moves['opponent'] == opponent_moves_this_step:
                 current_moves['opponent'] = 0
                 player = 'agent'
 
     return accumulated_reward, visited_states
+
+@njit(parallel=False)
+def run_mcts(n_iter, V, N, rewards, sas, agent_start_node, opponent_start_node, 
+             n_steps, C, agent_moves=1, min_opponent_moves=2, max_opponent_moves=3, opponent_policy_method=None, caught_cost=-50,
+             opponent_q_values=None, end_when_caught=True):
+
+    for i in range(n_iter):
+        accumulated_reward, visited_states = mcts_iteration(V, N, rewards, sas, agent_start_node, 
+                                                    opponent_start_node, n_steps, 
+                                                    C, agent_moves, min_opponent_moves, max_opponent_moves, opponent_policy_method, caught_cost,
+                                                    opponent_q_values, end_when_caught)
+        # Backpropogate
+        for v in visited_states:
+            V[v] += accumulated_reward
+            N[v] += 1
+
+    return V, N
+
+@njit
+def solve_all_value_iteration(sas, predator_reward_function, features, prey_index, max_iter=None, tol=None, discount=None):
+
+    all_q_values = np.zeros((sas.shape[0], sas.shape[0], sas.shape[1]))  # Prey idx X opponent_states X actions
+
+    for prey_state in range(features.shape[1]):
+
+        # Set prey feature according to the current prey location
+        features[prey_index, :] = 0
+        features[prey_index, prey_state] = 1
+
+        # Do value iteration
+        _, all_q_values[prey_state, ...] = solve_value_iteration(sas.shape[0], sas.shape[1], predator_reward_function, features, max_iter, discount, sas, tol)
+
+    return all_q_values
 
 
 class MCTS():
@@ -527,7 +622,7 @@ class MCTS():
         self.N = np.zeros((self.mdp.n_states)) # Times each node visited
 
     def calculate_rewards(self):
-        # TODO probably only need this for one agent (prey)
+
         self.rewards = np.zeros((self.mdp.n_states, 2))
 
         for n, agent in enumerate(self.agents):
@@ -535,105 +630,47 @@ class MCTS():
     
     def run_mcts(self, agent_start_node, opponent_start_node, n_steps, C, agent_moves=1, opponent_moves=2):
 
-        # Get rewards for each state based on agents' reward functions
-        self.calculate_rewards()  
-
         accumulated_reward, visited_states = mcts_iteration(self.V, self.N, self.rewards, self.mdp.sas, agent_start_node, 
                                                             opponent_start_node, n_steps, 
                                                             C, agent_moves, opponent_moves)
 
-        # V, N = self.V, self.N  # Makes things marginally quicker
-
-        # current_node = {'agent': agent_start_node, 'opponent': opponent_start_node}
-        # expand = True  # This determines whether we expand or simulate
-        # accumulated_reward = 0  # Total reward accumulated across all states
-        # visited_states = []
-
-        # player = 'agent'
-        # current_moves = {'agent': 0, 'opponent': 0}
-
-        # for step in range(n_steps):
-
-        #     # Get reward available in current state if it's the agent's turn - TODO check this is correct
-        #     if player == 'agent':
-        #         accumulated_reward += self.rewards[current_node['agent'], 0]
-
-        #         # If the agent and opponent are in the same state, the agent has been caught and loses
-        #         if current_node['agent'] == current_node['opponent']:
-        #             accumulated_reward = 0
-        #             break
-
-        #         # Append to list of visited states 
-        #         visited_states.append(current_node['agent'])
-
-        #     # Get actions and resulting states from current node
-        #     actions_states, actions, states = get_actions_states(self.mdp, current_node[player])
-
-        #     # Check whether we need to expand - if we haven't already expanded all possible next nodes
-        #     if expand and np.any(N[states] == 0):
-
-        #         # Identify states taht haven't been explored yet
-        #         unexplored = states[N[states] == 0]
-        #         # Select one of these at random
-        #         current_node[player] = np.random.choice(unexplored)
-            
-        #         # Each step from now on will be a simulation rather than expansion
-        #         expand = False
-
-        #     # If we've not yet reached a point where we need to expand, pick next state using UCT
-        #     elif expand:
-                
-        #         # If it's the agent's turn, use UCB
-        #         if player == 'agent':
-        #             # Calculate UCB (or UCT)
-        #             ucb = (V[states] / (1 + N[states])) + C * np.sqrt((2 * np.log(N[current_node['agent']])) / (1 + N[states]))
-
-        #             # Pick the node with the highest value
-        #             current_node['agent'] = states[np.argmax(ucb)]
-
-        #         # Otherwise pick at random - TODO opponent policy
-        #         else:
-        #             current_node['opponent'] = np.random.choice(states)
-
-
-        #     elif not step == n_steps - 1: # Randomly select follow-up nodes
-                
-        #         # Select random node
-        #         current_node[player] = np.random.choice(states)
-
-        #     # Next step should be the other player
-        #     if player == 'agent':
-        #         current_moves['agent'] += 1
-        #         if current_moves['agent'] == agent_moves:
-        #             current_moves['agent'] = 0
-        #             player = 'opponent'
-        #     else:
-        #         current_moves['opponent'] += 1
-        #         if current_moves['opponent'] == opponent_moves:
-        #             current_moves['opponent'] = 0
-        #             player = 'agent'
-        
         # Backpropogate
         self.V[visited_states] += accumulated_reward
         self.N[visited_states] += 1
 
     def get_action_values(self, start_node):
 
-        actions_states, actions, states = get_actions_states(self.mdp, start_node)
+        actions_states, actions, states = get_actions_states(self.mdp.sas, start_node)
 
         action_values = self.V[states] / (1 + self.N[states])
 
-        return actions, action_values
+        return actions, action_values, states
 
 
-    def fit(self, agent_start_node, opponent_start_node, n_steps=20, n_iter=100, C=1, agent_moves=1, opponent_moves=2):
+    def fit(self, agent_start_node, opponent_start_node, n_steps=20, n_iter=100, 
+            C=1, agent_moves=1, min_opponent_moves=2, max_opponent_moves=3, opponent_policy_method=None, caught_cost=-50,
+            opponent_q_values=None, end_when_caught=True):
 
         self.reset()  # Clear values
 
-        for i in progress_bar(range(n_iter)):
-            self.run_mcts(agent_start_node, opponent_start_node, n_steps, 
-                          C=C, agent_moves=agent_moves, opponent_moves=opponent_moves)
+        # Get rewards for each state based on agents' reward functions
+        self.calculate_rewards()  
 
-        actions, action_values = self.get_action_values(agent_start_node)
+        if opponent_policy_method == 'precalculated':
+            opponent_q_values = opponent_q_values[None, :, :]
+        # elif opponent_policy_method != 'solve':
+        #     opponent_q_values = np.zeros((1, 1, 1))
 
-        return actions, action_values
+        self.V, self.N = run_mcts(n_iter, self.V, self.N, self.rewards, self.mdp.sas, agent_start_node, 
+                                                            opponent_start_node, n_steps, 
+                                                            C, agent_moves, min_opponent_moves, max_opponent_moves, opponent_policy_method, caught_cost,
+                                                            opponent_q_values, end_when_caught)
+        
+        # for i in progress_bar(range(n_iter)):
+        #     self.run_mcts(agent_start_node, opponent_start_node, n_steps, 
+        #                   C=C, agent_moves=agent_moves, opponent_moves=opponent_moves)
+
+        actions, action_values, states = self.get_action_values(agent_start_node)
+
+        return actions, action_values, states
+
