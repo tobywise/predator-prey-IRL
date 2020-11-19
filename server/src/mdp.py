@@ -142,6 +142,32 @@ def grid_coords(state_grid):
 
     return grid_state_id, grid_idx
 
+def environment_from_dict(env_dict):
+
+    if not env_dict['type'] == 'hex':
+        raise NotImplementedError()
+
+    else:
+        n_features = len(env_dict['feature_names'])
+        features = np.zeros((n_features, np.product(env_dict['size'])))
+        for n, f in enumerate(env_dict['feature_names']):
+            states = env_dict['features'][f]
+            features[n, states] = 1
+        newMDP = HexGridMDP(features, env_dict['size'], self_transitions=env_dict['self_transitions'])
+
+        agent_list = []
+        for agent, agent_info in env_dict['agents'].items():
+            agent_list.append(Agent(agent, agent_info['reward_function'], position=agent_info['position'], solver_kwargs=agent_info['solver_kwargs']))
+
+        newEnvironment = HexEnvironment(newMDP, agent_list)
+
+        return newEnvironment
+
+def environment_from_json(json_string):
+    env_dict = json.loads(json_string)
+
+    return environment_from_dict(env_dict)
+
 class MDP():
 
     def __init__(self, features, sas, adjacency=None, feature_names=None):
@@ -222,6 +248,7 @@ class HexGridMDP(MDP):
         self.size = size
         self.grid = np.zeros(self.size)
         self.n_actions = 6
+        self.self_transitions = self_transitions
         if self_transitions:
             self.n_actions += 1
         self.n_states = np.product(self.size)
@@ -260,10 +287,11 @@ class HexGridMDP(MDP):
 
 class HexEnvironment(HexPlottingMixin):
 
-    def __init__(self, mdp, agents):
+    def __init__(self, mdp, agents, name=''):
 
         self.mdp = mdp
         self.agents = []
+        self.name = name
 
         for a in agents:
             self.attach_agent(a)
@@ -304,7 +332,12 @@ class HexEnvironment(HexPlottingMixin):
         self.mdp.features[self.mdp.n_features - len(self.agents) + agent_id, :] = 0
         self.mdp.features[self.mdp.n_features - len(self.agents) + agent_id, position] = 1
 
-    def to_dict(self, feature_names):
+    def to_dict(self, feature_names=None):
+
+        if feature_names is None and self.mdp.feature_names is None:
+            raise ValueError("No feature names provided")
+        elif feature_names is None and self.mdp.feature_names is not None:
+            feature_names = self.mdp.feature_names
 
         if not (self.mdp.n_features - len(self.agents)) == len(feature_names):
             raise AttributeError('Number of feature names should equal number of features, excluding agents')
@@ -315,14 +348,23 @@ class HexEnvironment(HexPlottingMixin):
         env_dict['features'] = {}
 
         for f in range(self.mdp.n_features - len(self.agents)):
-            env_dict['features'][feature_names[f]] = np.stack(self.mdp.state_to_idx(np.where(self.mdp.features[f, :]))).T.squeeze().astype(int).tolist()
+            env_dict['features'][feature_names[f]] = np.where(self.mdp.features[f, :])[0].astype(int).tolist()
+
+        env_dict['type'] = 'hex'
+        env_dict['self_transitions'] = self.mdp.self_transitions
+        env_dict['feature_names'] = feature_names
+
+        env_dict['agents'] = {}
 
         for agent in self.agents:
-            env_dict['features'][agent.name] = [[int(i) for i in list(self.mdp.state_to_idx(agent.position))]]
+            env_dict['agents'][agent.name] = {}
+            env_dict['agents'][agent.name]['position'] = agent.position
+            env_dict['agents'][agent.name]['reward_function'] = agent.reward_function
+            env_dict['agents'][agent.name]['solver_kwargs'] = agent.solver_kwargs
 
         return env_dict
 
-    def to_json(self, feature_names, return_string=False, fname=None):
+    def to_json(self, feature_names=None, return_string=False, fname=None):
 
         json_dict = self.to_dict(feature_names)
     
@@ -345,6 +387,7 @@ class Agent():
 
         # self.mdp = mdp
         self.reward_function = reward_function
+        self.solver_kwargs = solver_kwargs
         self.solver = solver(**solver_kwargs)
         self.position = position
         self.startingPosition = position
@@ -370,6 +413,4 @@ class Agent():
 
         self.solver.fit(self.mdp, self.reward_function, **kwargs)
 
-        
-        
 

@@ -20,10 +20,8 @@ def state_value_iterator(n_states, values, delta, q_values, reward, discount, sa
         # Loop over actions for this state
         for a in range(n_actions):
             # Probability of transitions given action - allows non-deterministic MDPs
-            # print(s, a)
             p_sprime = sas[s, a, :]  
             # Value of each state given actions
-            testtt = np.dot(p_sprime, reward + discount*values)
             action_values[a] = np.dot(p_sprime, reward + discount*values)
 
         q_values[s, :] = action_values
@@ -78,7 +76,7 @@ def solve_value_iteration(n_states, n_actions, reward_function, features, max_it
     q_values_ = np.zeros((n_states, n_actions))
 
     # Get state rewards based on the supplied reward function
-    reward_ = np.dot(reward_function, features)
+    reward_ = np.dot(reward_function.astype(np.float64), features)
 
     # Until converged   
     for i in range(max_iter):
@@ -483,6 +481,30 @@ def get_opponent_next_state(opponent_policy_method, opponent_q_values, agent_sta
 def mcts_iteration(V, N, rewards, sas, agent_start_node, opponent_start_node, n_steps, C, 
                    agent_moves=1, min_opponent_moves=2, max_opponent_moves=3, opponent_policy_method=None, 
                    caught_cost=-50, opponent_q_values=None, end_when_caught=True):
+    """Runs a single iteration of Monte Carlo Tree Search (i.e. starting from a root node and estimating total reward received).
+
+    Note: We only count the number of visits for the agent's states, as the opponent is treated as an uncontrollable external factor.
+
+    Args:
+        V (np.ndarray): Estimated value of each state
+        N (np.ndarray): Number of times each state has been visited
+        rewards (np.ndarray): Reward available in each state
+        sas (np.ndarray): State > action > state transition matrix
+        agent_start_node ([type]): [description]
+        opponent_start_node ([type]): [description]
+        n_steps ([type]): [description]
+        C ([type]): [description]
+        agent_moves (int, optional): [description]. Defaults to 1.
+        min_opponent_moves (int, optional): [description]. Defaults to 2.
+        max_opponent_moves (int, optional): [description]. Defaults to 3.
+        opponent_policy_method ([type], optional): [description]. Defaults to None.
+        caught_cost (int, optional): [description]. Defaults to -50.
+        opponent_q_values ([type], optional): [description]. Defaults to None.
+        end_when_caught (bool, optional): [description]. Defaults to True.
+
+    Returns:
+        [type]: [description]
+    """
 
     current_node = {'agent': agent_start_node, 'opponent': opponent_start_node}
     expand = True  # This determines whether we expand or simulate
@@ -513,12 +535,12 @@ def mcts_iteration(V, N, rewards, sas, agent_start_node, opponent_start_node, n_
             visited_states.append(current_node['agent'])
 
         # Get actions and resulting states from current node
-        actions_states, actions, states = get_actions_states(sas, current_node[player])
+        _, actions, states = get_actions_states(sas, current_node[player])
 
         # Check whether we need to expand - if we haven't already expanded all possible next nodes
         if expand and np.any(N[states] == 0):
 
-            # Identify states taht haven't been explored yet
+            # Identify states that haven't been explored yet
             unexplored = states[N[states] == 0]
             # Select one of these at random
             current_node[player] = np.random.choice(unexplored)

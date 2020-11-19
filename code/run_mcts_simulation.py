@@ -11,6 +11,7 @@ import numba.tests.npyufunc.test_ufuncbuilding
 import uuid
 import os
 import joblib
+from copy import deepcopy
 
 # np.random.seed(123)
 
@@ -60,18 +61,6 @@ def create_overlapping_reward(overlap, n_reward, feature):
 
 if __name__ == "__main__":
 
-    # parser = argparse.ArgumentParser(description='List the content of a folder')
-
-    # parser.add_argument('predator_reward_function', type=str)
-    # parser.add_argument('entropy', type=int)
-    # parser.add_argument('overlap', type=float)
-    # parser.add_argument('n_starting_positions', type=int)
-    # parser.add_argument('opponent_policy', type=str)
-    # parser.add_argument('n_trees', type=int, default=50)
-    # parser.add_argument('n_rewards', type=int, default=30)
-    # parser.add_argument('n_mcts', type=int, default=10000)
-    # parser.add_argument('n_turns', type=int, default=10000)
-    
     parameters = pd.read_csv('../data/parameter_df.csv')
     row = int(os.environ['SLURM_ARRAY_TASK_ID'])
     # row = 20
@@ -82,9 +71,6 @@ if __name__ == "__main__":
 
     # Create unique ID for this run
     UID = uuid.uuid4()
-
-    # Execute the parse_args() method
-    # args = parser.parse_args()
 
     # Extract reward function
     predator_reward_function = [float(i) for i in parameters.predator_reward_function.split(',')]
@@ -103,9 +89,6 @@ if __name__ == "__main__":
         # CREATE ENVIRONMENT
         rng = RandomState(123)
         features = np.zeros((3, 21 * 10))
-
-        # Random red
-        # features[1, rng.randint(0, 21 * 10, 50)] = 1
 
         if parameters.predator_start_location == 'left':
             prey_pos, predator_pos = np.random.choice(range(50), size=2, replace=False)
@@ -129,74 +112,74 @@ if __name__ == "__main__":
         testMDP.features[2, :] = reward_states
 
         feature_maps.append(testMDP.features)
+        opponent_trajectory_dict = {}
+        agent_trajectory_dict = {}
 
         testEnvironment = HexEnvironment(testMDP, [testAgent1, testAgent2])
 
-        # Set up MCTS
-        mcts = MCTS(testMDP, [testAgent2, testAgent2])
+        for opponent_policy in ['solve', 'unknown']:
 
-        # Run
-        env = testEnvironment
+            # Set up MCTS
+            mcts = MCTS(testMDP, [testAgent2, testAgent2])
 
-        game_trajectory = {'agent': [env.agents[1].position], 'opponent': [env.agents[0].position]}
-        reward_gained = 0
-        caught = 0
-        
-        predator_min_moves, predator_max_moves = tuple([int(i) for i in parameters.predator_moves[1:-1].split(',')])
-        predator_max_moves += 1
+            # Run
+            env = deepcopy(testEnvironment)
 
-        # Calculate predator Q values for all possible prey positions
-        opponent_q_values = solve_all_value_iteration(testMDP.sas, np.array(predator_reward_function), testMDP.features, -1, discount=0.9, tol=1e-8, max_iter=500)
+            game_trajectory = {'agent': [env.agents[1].position], 'opponent': [env.agents[0].position]}
+            reward_gained = 0
+            caught = 0
+            
+            predator_min_moves, predator_max_moves = tuple([int(i) for i in parameters.predator_moves[1:-1].split(',')])
+            predator_max_moves += 1
 
-        # Solve predator once if needed
-        if parameters.opponent_policy == 'known':
-            env.fit_agent(0, method='numba', show_progress=False)
+            # Calculate predator Q values for all possible prey positions
+            opponent_q_values = solve_all_value_iteration(testMDP.sas, np.array(predator_reward_function), testMDP.features, -1, discount=0.9, tol=1e-8, max_iter=500)
 
-        for move in tqdm(range(parameters.n_turns)):
-            mcts.reset()
+            for move in tqdm(range(parameters.n_turns)):
+                mcts.reset()
 
-            # Solve for prey using MCTS
-            if parameters.opponent_policy == 'known':
-                actions, action_values, states = mcts.fit(env.agents[1].position, env.agents[0].position, n_iter=parameters.n_mcts, C=2, min_opponent_moves=predator_min_moves, max_opponent_moves=predator_max_moves, 
-                                                        n_steps=parameters.n_turns*3, opponent_policy_method='precalculated', caught_cost=parameters.caught_cost, opponent_q_values=env.agents[0].solver.q_values_)
-            elif parameters.opponent_policy == 'solve':
-                actions, action_values, states = mcts.fit(env.agents[1].position, env.agents[0].position, n_iter=parameters.n_mcts, C=2, min_opponent_moves=predator_min_moves, max_opponent_moves=predator_max_moves, 
-                                                        n_steps=parameters.n_turns*3, opponent_policy_method='solve', caught_cost=parameters.caught_cost, opponent_q_values=opponent_q_values)
-            else:
-                actions, action_values, states = mcts.fit(env.agents[1].position, env.agents[0].position, n_iter=parameters.n_mcts, C=2, min_opponent_moves=predator_min_moves, max_opponent_moves=predator_max_moves, 
-                                                        n_steps=parameters.n_turns*3, opponent_policy_method=None, caught_cost=parameters.caught_cost)
-                
-            # Get best next state
-            next_state = states[np.argmax(action_values)]
-            game_trajectory['agent'].append(next_state)
+                # Solve for prey using MCTS
+                if opponent_policy == 'solve':
+                    actions, action_values, states = mcts.fit(env.agents[1].position, env.agents[0].position, n_iter=parameters.n_mcts, C=2, min_opponent_moves=predator_min_moves, max_opponent_moves=predator_max_moves, 
+                                                            n_steps=parameters.n_turns*3, opponent_policy_method='solve', caught_cost=parameters.caught_cost, opponent_q_values=opponent_q_values)
+                elif opponent_policy == 'unknown':
+                    actions, action_values, states = mcts.fit(env.agents[1].position, env.agents[0].position, n_iter=parameters.n_mcts, C=2, min_opponent_moves=predator_min_moves, max_opponent_moves=predator_max_moves, 
+                                                            n_steps=parameters.n_turns*3, opponent_policy_method=None, caught_cost=parameters.caught_cost)
+                    
+                # Get best next state
+                next_state = states[np.argmax(action_values)]
+                game_trajectory['agent'].append(next_state)
 
-            # Move prey
-            env.move_agent(1, next_state)
+                # Move prey
+                env.move_agent(1, next_state)
 
-            # Solve MDP for predator - done every move to allow for dependence on prey position
-            env.fit_agent(0, method='numba', show_progress=False)
-            # Move predator
-            game_trajectory['opponent'] += env.agents[0].generate_trajectory(n_steps=np.random.randint(predator_min_moves, predator_max_moves), start_state=game_trajectory['opponent'][-1])[1:]
-            env.move_agent(0, game_trajectory['opponent'][-1])
+                # Solve MDP for predator - done every move to allow for dependence on prey position
+                env.fit_agent(0, method='numba', show_progress=False)
+                # Move predator
+                game_trajectory['opponent'] += env.agents[0].generate_trajectory(n_steps=np.random.randint(predator_min_moves, predator_max_moves), start_state=game_trajectory['opponent'][-1])[1:]
+                env.move_agent(0, game_trajectory['opponent'][-1])
 
-            # If caught
-            if next_state in game_trajectory['opponent']:
-                print("CAUGHT")
-                caught += 1
-                reward_gained += parameters.caught_cost
-                break   
+                # If caught
+                if next_state in game_trajectory['opponent']:
+                    print("CAUGHT")
+                    caught += 1
+                    reward_gained += parameters.caught_cost
+                    break   
 
-            # Remove reward
-            if env.mdp.features[2, next_state] == 1:
-                reward_gained += 1
-                env.mdp.features[2, next_state] = 0
+                # Remove reward
+                if env.mdp.features[2, next_state] == 1:
+                    reward_gained += 1
+                    env.mdp.features[2, next_state] = 0
 
-        print(reward_gained)
-        run_rewards.append(reward_gained)
-        run_caught.append(caught)
+            print(reward_gained)
+            run_rewards.append(reward_gained)
+            run_caught.append(caught)
 
-        agent_trajectories.append(game_trajectory['agent'])
-        opponent_trajectories.append(game_trajectory['opponent'])
+            opponent_trajectory_dict[opponent_policy] = game_trajectory['agent']
+            agent_trajectory_dict[opponent_policy] = game_trajectory['opponent']
+
+        agent_trajectories.append(agent_trajectory_dict)
+        opponent_trajectories.append(opponent_trajectory_dict)
 
     # Save output
     if not os.path.exists('../data/mcts_simulations/v{0}'.format(parameters.version)):
@@ -206,22 +189,22 @@ if __name__ == "__main__":
   
     # Results of simulation
     out_df = pd.DataFrame({
-        'entropy': [parameters.entropy] * parameters.n_starting_positions,
-        'overlap': [parameters.overlap] * parameters.n_starting_positions,
-        'entropy': [parameters.entropy] * parameters.n_starting_positions,
-        'n_trees': [parameters.n_trees] * parameters.n_starting_positions,
-        'n_turns': [parameters.n_turns] * parameters.n_starting_positions,
-        'opponent_policy': [parameters.opponent_policy] * parameters.n_starting_positions,
-        'n_mcts': [parameters.n_mcts] * parameters.n_starting_positions,
-        'n_rewards': [parameters.n_rewards] * parameters.n_starting_positions,
-        'predator_reward_function': [parameters.predator_reward_function] * parameters.n_starting_positions,
+        'entropy': [parameters.entropy] * parameters.n_starting_positions * 2,
+        'overlap': [parameters.overlap] * parameters.n_starting_positions * 2,
+        'entropy': [parameters.entropy] * parameters.n_starting_positions * 2,
+        'n_trees': [parameters.n_trees] * parameters.n_starting_positions * 2,
+        'n_turns': [parameters.n_turns] * parameters.n_starting_positions * 2,
+        'opponent_policy': ['solve', 'unknown'] * parameters.n_starting_positions,
+        'n_mcts': [parameters.n_mcts] * parameters.n_starting_positions * 2,
+        'n_rewards': [parameters.n_rewards] * parameters.n_starting_positions * 2,
+        'predator_reward_function': [parameters.predator_reward_function] * parameters.n_starting_positions * 2,
         'reward_gained': run_rewards,
         'caught': run_caught,
-        'runID': [UID] * parameters.n_starting_positions,
-        'caught_cost': [parameters.caught_cost] * parameters.n_starting_positions,
-        'predator_start_location': [parameters.predator_start_location] * parameters.n_starting_positions,
-        'predator_min_moves': [predator_min_moves] * parameters.n_starting_positions,
-        'predator_max_moves': [predator_max_moves - 1] * parameters.n_starting_positions
+        'runID': [UID] * parameters.n_starting_positions * 2,
+        'caught_cost': [parameters.caught_cost] * parameters.n_starting_positions * 2,
+        'predator_start_location': [parameters.predator_start_location] * parameters.n_starting_positions * 2,
+        'predator_min_moves': [predator_min_moves] * parameters.n_starting_positions * 2,
+        'predator_max_moves': [predator_max_moves - 1] * parameters.n_starting_positions * 2
     })
 
     out_df.to_csv('../data/mcts_simulations/v{0}/run-{1}.csv'.format(parameters.version, UID))

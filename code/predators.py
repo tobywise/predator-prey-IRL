@@ -8,6 +8,8 @@ from scipy.spatial.distance import cdist
 import pandas as pd
 from sisyphus.mdp import ValueIteration
 from collections import OrderedDict
+import json
+import re
 # from sisyphus.envs._base import grid_to_adj
 
 def offset_distance(x1,y1,x2,y2):
@@ -35,6 +37,9 @@ def hex_dist(XA, XB):
             dist[n, nn] = offset_distance(i[0], i[1], j[0], j[1])
 
     return dist
+
+def state_to_idx(state, env):
+    return np.unravel_index(state, env.size)
 
 def grid_to_adj(grid, terminal=False, kind='square'):
     """Convert grid world to adjacency matrix.
@@ -457,6 +462,26 @@ class PredatorEnvironment(object):
 
         return feature_matrix
 
+    def to_json(self, return_string=False, fname=None):
+
+        json_dict = dict()
+
+        json_dict['size'] = list(self.size)
+
+        json_dict['features'] = dict()
+
+        for k, v in self.feature_arrays.items():
+            json_dict['features'][k] = [list([int(j) for j in i]) for i in np.argwhere(v)]
+
+    
+        if fname is not None:
+            with open(fname, 'w') as f:
+                json.dump(json_dict, f)
+
+        if return_string:
+            json_string = json.dumps(json_dict)
+            return json_string
+
 
 
 class EnvironmentFeature(object):
@@ -544,21 +569,9 @@ class Agent(object):
         if not len(self.idx):
             self.idx = (np.random.randint(self.environment.size[1]), np.random.randint(self.environment.size[0]))
 
-    # def _repr_latex_(self):
-    #     f = ''
-    #     for n, i in enumerate(self.function):
-    #         f += r'{0} \times X_{1} +'.format(i, n)
-    #     f = f[:-2]
-    #     return r'< Predator {0} | $y = {1}$ | Strategy = {2} >'.format('"' + self.name + '"', f, self.strategy)
-
     def get_state_rewards(self):
 
-        if self.strategy == 'function':
-            # for feature, feature_array in self.environment.feature_arrays.items():
-            #     self.distance_arrays[feature] = self._get_distance(np.argwhere(feature_array)) 
-
-            # Use function
-            self.state_rewards = get_function(self.function, self.environment.feature_arrays)
+        self.state_rewards = get_function(self.function, self.environment.feature_arrays)
 
     def get_state_action_transitions(self):
 
@@ -601,7 +614,7 @@ class Agent(object):
         R[:, :] = self.state_rewards.flatten()    # Reward transition     
         R[self.terminal, self.terminal] = 0              # Terminal transitions
         R *= self.T
-            
+
         ## Iteratively define MDP information.
         info = []
         for s in range(np.product(self.environment.size)):
@@ -628,9 +641,9 @@ class Agent(object):
             adj = [np.ravel_multi_index((i[1], i[0]), self.environment.size) for i in adj]
             self.update_info(terminal=adj)
 
-        print("updated info")
+        # print("updated info")
         self.solver.fit(self)
-        print("solved")
+        # print("solved")
         self.solved = True
         if self.sas is None:
             self.get_state_action_transitions()
@@ -791,10 +804,11 @@ class Agent(object):
         self.idx = (x, y)
         self.environment.feature_arrays[self.name] *= 0
         self.environment.feature_arrays[self.name][y, x] = 1
+        self.get_state_rewards()
         self.solved = False
 
 
-    def plot_policy(self, color='w', head_width=0.25, head_length=0.25, ax=None, cbar=True, **kwargs):
+    def plot_policy(self, color='w', head_width=0.25, head_length=0.25, ax=None, cbar=True, pi=None, **kwargs):
         """Plot agent policy on grid world.
         Parameters
         ----------
@@ -814,10 +828,11 @@ class Agent(object):
             Axes in which to draw the plot.
         """
 
-        if not self.solved:
+        if not self.solved and pi is None:
             self.solve()
         ax, coords = self.plot_state_values(ax=ax, cbar=cbar,  **kwargs)
-        pi = self.solver.pi
+        if pi is None:
+            pi = self.solver.pi
 
         ## Error-catching.
         if isinstance(color, str):

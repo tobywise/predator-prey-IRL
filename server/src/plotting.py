@@ -86,7 +86,7 @@ class HexPlottingMixin():
 
         # Features
         for i in range(self.mdp.n_features):
-            temp_array = self.mdp.features[i, :].reshape(self.mdp.size)
+            temp_array = self.mdp.features[i, :].reshape(self.mdp.size).copy()
             temp_array *= (i + 1)
 
             hex_coords = draw_hexagons(temp_array, alpha=1 / self.mdp.n_features, 
@@ -125,7 +125,7 @@ class HexPlottingMixin():
 
         if filename is not None:
             plt.savefig(filename)
-
+        
         plt.show()
 
 
