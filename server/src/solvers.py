@@ -288,7 +288,7 @@ class MaxCausalEntIRL(ValueIteration):
 
         # Initial guess at reward function
         if reset or self.theta is None:
-            self.theta = np.ones(mdp.n_features) * 0.5
+            self.theta = np.ones(mdp.n_features) * 0
 
         # History of error
         self.error_history = []
@@ -297,8 +297,7 @@ class MaxCausalEntIRL(ValueIteration):
         pb = progress_bar(range(self.max_iter_irl))
 
         for i in pb:
-            
-            
+
             deltaF = self._maxcausalent_innerloop(mdp, self.theta, trajectories)
             deltaF[ignore_features] = 0
             # print(visited_states, self.D_)

@@ -156,7 +156,14 @@ def environment_from_dict(env_dict):
         newMDP = HexGridMDP(features, env_dict['size'], self_transitions=env_dict['self_transitions'])
 
         agent_list = []
-        for agent, agent_info in env_dict['agents'].items():
+
+        # This makes sure predator is first in the list of agents
+        agent_names = list(env_dict['agents'].keys())
+        agent_names = sorted(agent_names)
+        print(agent_names)
+
+        for agent in agent_names:
+            agent_info = env_dict['agents'][agent]
             agent_list.append(Agent(agent, agent_info['reward_function'], position=agent_info['position'], solver_kwargs=agent_info['solver_kwargs']))
 
         newEnvironment = HexEnvironment(newMDP, agent_list)
@@ -332,7 +339,7 @@ class HexEnvironment(HexPlottingMixin):
         self.mdp.features[self.mdp.n_features - len(self.agents) + agent_id, :] = 0
         self.mdp.features[self.mdp.n_features - len(self.agents) + agent_id, position] = 1
 
-    def to_dict(self, feature_names=None):
+    def to_dict(self, feature_names=None, format='index'):
 
         if feature_names is None and self.mdp.feature_names is None:
             raise ValueError("No feature names provided")
@@ -348,7 +355,10 @@ class HexEnvironment(HexPlottingMixin):
         env_dict['features'] = {}
 
         for f in range(self.mdp.n_features - len(self.agents)):
-            env_dict['features'][feature_names[f]] = np.where(self.mdp.features[f, :])[0].astype(int).tolist()
+            if format == 'index':
+                env_dict['features'][feature_names[f]] = np.where(self.mdp.features[f, :])[0].astype(int).tolist()
+            elif format == 'coords':
+                env_dict['features'][feature_names[f]] = np.stack(self.mdp.state_to_idx(np.where(self.mdp.features[f, :]))).T.squeeze().astype(int).tolist()
 
         env_dict['type'] = 'hex'
         env_dict['self_transitions'] = self.mdp.self_transitions
@@ -358,7 +368,10 @@ class HexEnvironment(HexPlottingMixin):
 
         for agent in self.agents:
             env_dict['agents'][agent.name] = {}
-            env_dict['agents'][agent.name]['position'] = agent.position
+            if format == 'index':
+                env_dict['agents'][agent.name]['position'] = agent.position
+            elif format == 'coords':
+                env_dict['agents'][agent.name]['position']  = [[int(i) for i in list(self.mdp.state_to_idx(agent.position))]]
             env_dict['agents'][agent.name]['reward_function'] = agent.reward_function
             env_dict['agents'][agent.name]['solver_kwargs'] = agent.solver_kwargs
 

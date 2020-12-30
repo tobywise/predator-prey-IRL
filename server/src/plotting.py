@@ -73,9 +73,9 @@ def draw_hexagons(X, outer_radius=0.1, edgecolor='#787878', cmap='Greys', ax=Non
 
 class HexPlottingMixin():
 
-    def plot_environment(self, filename=None, labels=False, trajectory=None, feature_colours=None, **kwargs):
+    def plot_environment(self, filename=None, labels=False, trajectory=None, feature_colours=None, trajectory_colour='w', height=2.8, aspect=2, **kwargs):
 
-        fig, ax = plt.subplots(1, figsize=(self.mdp.size[1] / 2, self.mdp.size[0] / 2), dpi=150)
+        fig, ax = plt.subplots(1, figsize=(height*aspect, height), dpi=150)
 
         if feature_colours is None:
             facecolors = ['cmap'] * self.mdp.n_features
@@ -116,7 +116,12 @@ class HexPlottingMixin():
         coords = draw_hexagons(np.ones((self.mdp.size[0], self.mdp.size[1])), ax=ax, scale=False, facecolor=(0, 0, 0, 0), labels=labels, return_coords=True)
 
         if trajectory is not None:
-            self._plot_trajectory(trajectory, ax, coords, **kwargs)
+            trajectory_colour = list(trajectory_colour)
+            if not isinstance(trajectory, tuple):
+                self._plot_trajectory(trajectory, ax, coords, color=trajectory_colour[0], **kwargs)
+            elif isinstance(trajectory, tuple):
+                for n, i in enumerate(trajectory):
+                    self._plot_trajectory(i, ax, coords, color=trajectory_colour[n], **kwargs)
 
         # Rewards
         # for r in np.argwhere(self.feature_arrays['reward'].T == 1):
